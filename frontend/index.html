@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wander · AI Travel Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="styles.css" />
+  <!-- marked: render the agent's markdown response beautifully -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="brand">✈️ Wander</div>
+      <h1>Plan your next trip with AI</h1>
+      <p class="tagline">A multi-agent travel planner — flights, hotels, weather &amp; a day-by-day itinerary, on demand.</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="composer card">
+      <label for="prompt" class="label">Where to?</label>
+      <textarea id="prompt" rows="3"
+        placeholder="e.g. Plan a 5-day trip from NYC to Tokyo in March — flights, hotels, weather, and a day-by-day plan."></textarea>
+
+      <div class="chips" id="examples" aria-label="example prompts">
+        <button class="chip" type="button">3-day food trip to Bangkok from Singapore</button>
+        <button class="chip" type="button">7-day Bali surf trip from Sydney</button>
+        <button class="chip" type="button">Romantic 4 days in Kyoto for cherry blossoms</button>
+        <button class="chip" type="button">5-day family ski trip to Banff from Chicago</button>
+      </div>
+
+      <div class="actions">
+        <button id="go" class="btn-primary" type="button">Plan my trip</button>
+        <span id="status" class="status" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section id="result" class="result card hidden" aria-live="polite"></section>
+
+    <section id="error" class="error card hidden" role="alert"></section>
+  </main>
+
+  <footer class="footer">
+    <span>Demo · powered by Amazon Bedrock AgentCore + Strands · observability via OpenTelemetry → New Relic</span>
+    <span class="muted">Flight &amp; hotel results are indicative, not live bookings.</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
