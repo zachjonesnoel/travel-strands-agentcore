@@ -14,7 +14,7 @@ range, prefer the forecast tool. Be concise and traveler-focused."""
 
 def build_weather_agent() -> Agent:
     return Agent(
-        model=get_model(),
+        model=get_model("weather"),
         system_prompt=SYSTEM_PROMPT,
         tools=[get_weather, get_forecast],
     )

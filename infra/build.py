@@ -22,8 +22,10 @@ AGENT_SRC = REPO / "agent"
 API_SRC = REPO / "api"
 BUILD = REPO / "infra" / ".build"
 
-# Files/dirs in agent/ that must NOT ship to the runtime.
-_AGENT_EXCLUDE = {"Dockerfile", "__pycache__", ".bedrock_agentcore.yaml"}
+# Files/dirs in agent/ that must NOT ship to the runtime. Notably .venv: a
+# local dev virtualenv holds macOS Mach-O binaries that are incompatible with
+# the Linux ARM64 runtime and fail artifact validation if shipped.
+_AGENT_EXCLUDE = {"Dockerfile", "__pycache__", ".bedrock_agentcore.yaml", ".venv", "venv", ".env"}
 
 
 def _clean(path: Path) -> Path:

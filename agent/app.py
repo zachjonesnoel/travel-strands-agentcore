@@ -1,8 +1,9 @@
 """Amazon Bedrock AgentCore Runtime entry point.
 
 Wraps the travel orchestrator in a ``BedrockAgentCoreApp``. The runtime serves
-the AgentCore contract (POST /invocations, GET /ping) on port 8080. Telemetry
-is initialized at module load so spans/metrics/logs flow from the first request.
+the AgentCore contract (POST /invocations, GET /ping) on port 8080. The New
+Relic agent is initialized at module load so its instrumentation is applied
+before the LLM clients are built, and every invocation reports as a transaction.
 
 Payload shape:
     {"prompt": "Plan a trip from NYC to Tokyo in March", "session_id": "..."}
@@ -13,17 +14,20 @@ import uuid
 
 from dotenv import load_dotenv
 
-# Load .env first (no-op in the container if absent), then telemetry, then
-# import the agent so the model client is built after OTel is configured.
+# Load .env first (no-op in the container if absent), then initialize New Relic,
+# then import the agent so the model client is built after the agent's
+# instrumentation hooks (Bedrock/OpenAI) are in place.
 load_dotenv()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-from observability import setup_telemetry  # noqa: E402
+from observability import record_attributes, setup_telemetry  # noqa: E402
 
 setup_telemetry("travel-agent-agentcore")
+
+import newrelic.agent  # noqa: E402
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp  # noqa: E402
 
@@ -34,6 +38,7 @@ app = BedrockAgentCoreApp()
 
 
 @app.entrypoint
+@newrelic.agent.background_task()
 def invoke(payload: dict, context=None) -> dict:
     """Handle a single AgentCore invocation.
 
@@ -56,13 +61,8 @@ def invoke(payload: dict, context=None) -> dict:
     ) or str(uuid.uuid4())
 
     logger.info("AgentCore invocation (session %s)", session_id)
-    result = run_travel_query(
-        prompt,
-        trace_attributes={
-            "session.id": session_id,
-            "app.environment": "agentcore",
-        },
-    )
+    record_attributes({"session.id": session_id, "app.environment": "agentcore"})
+    result = run_travel_query(prompt)
     return {"session_id": session_id, "result": result}
 
 

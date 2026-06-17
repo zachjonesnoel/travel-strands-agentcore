@@ -6,6 +6,8 @@ ECR is involved. The code zip (source + vendored arm64 deps) is produced by
 infra/build.build_agent() and uploaded as a CDK S3 asset.
 """
 
+import re
+
 from aws_cdk import (
     Stack,
     CfnOutput,
@@ -25,12 +27,17 @@ class AgentStack(Stack):
         scope: Construct,
         cid: str,
         *,
-        model_id: str,
-        nr_key: str,
-        otel_endpoint: str,
+        deployment_id: str,
+        model_env: dict,
+        nr_env: dict,
         **kwargs,
     ) -> None:
         super().__init__(scope, cid, **kwargs)
+
+        # AgentRuntimeName allows only letters, digits and underscores and must
+        # start with a letter — sanitize the deployment id accordingly.
+        safe_id = re.sub(r"[^A-Za-z0-9]", "_", deployment_id)
+        runtime_name = f"travel_agent_{safe_id}"[:48]
 
         # Execution role assumed by the AgentCore service (mirrors the toolkit's
         # default role: logs + xray + cloudwatch + bedrock:InvokeModel*).
@@ -75,21 +82,17 @@ class AgentStack(Stack):
         code = s3_assets.Asset(self, "Code", path=build_agent())
         code.grant_read(role)
 
-        env_vars = {
-            "BEDROCK_MODEL_ID": model_id,
-            "OTEL_EXPORTER_OTLP_ENDPOINT": otel_endpoint,
-            "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
-            "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
-        }
-        if nr_key:
-            env_vars["NEW_RELIC_LICENSE_KEY"] = nr_key
+        # Model selection (global BEDROCK_MODEL_ID + per-agent overrides) and
+        # New Relic config are both assembled from ../.env in infra/app.py, so
+        # all runtime configuration lives in one place.
+        env_vars = {**model_env, **nr_env}
 
         runtime = CfnResource(
             self,
             "Runtime",
             type="AWS::BedrockAgentCore::Runtime",
             properties={
-                "AgentRuntimeName": "travel_agent_cdk",
+                "AgentRuntimeName": runtime_name,
                 "RoleArn": role.role_arn,
                 "NetworkConfiguration": {"NetworkMode": "PUBLIC"},
                 "AgentRuntimeArtifact": {

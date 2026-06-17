@@ -1,5 +1,5 @@
-# Core agent framework + OpenTelemetry integration
-strands-agents[otel]>=1.0.0
+# Core agent framework
+strands-agents>=1.0.0
 strands-agents-tools>=0.1.0
 
 # Amazon Bedrock AgentCore runtime
@@ -9,9 +9,8 @@ bedrock-agentcore>=0.1.0
 ddgs>=9.0.0
 httpx>=0.27.0
 
-# OpenTelemetry OTLP/HTTP exporter (traces, metrics, logs)
-opentelemetry-exporter-otlp-proto-http>=1.27.0
-opentelemetry-sdk>=1.27.0
+# New Relic Python agent with AI Monitoring (instruments Bedrock/OpenAI calls)
+newrelic>=10.2.0
 
 # Local dev convenience
 python-dotenv>=1.0.0

@@ -1,13 +1,18 @@
-"""Configure OpenTelemetry (traces, metrics, logs) and export over OTLP/HTTP.
+"""Initialize the New Relic Python agent (APM + AI Monitoring).
 
-Strands ships built-in OTel instrumentation via ``StrandsTelemetry`` which
-reads standard ``OTEL_*`` environment variables. We set those variables here
-(targeting New Relic's OTLP endpoint by default), wire up trace + metric
-exporters through Strands, and additionally bridge Python ``logging`` records
-to OTLP logs.
+The New Relic agent auto-instruments the underlying LLM SDK calls that Strands
+makes — Amazon Bedrock (via ``botocore`` ``invoke_model``/``converse``) and the
+OpenAI client — so model invocations, token usage, and AI-monitoring events are
+captured natively, with no OpenTelemetry plumbing.
 
-All exporters are best-effort: if no ingest key is configured, telemetry is
-skipped with a warning rather than crashing the agent.
+Configuration is environment-variable only (no ``newrelic.ini``). The agent
+reads ``NEW_RELIC_*`` vars; the important ones:
+  * NEW_RELIC_LICENSE_KEY            (ingest/license key — required to report)
+  * NEW_RELIC_APP_NAME               (APM app name; defaults to service_name)
+  * NEW_RELIC_AI_MONITORING_ENABLED  (set "true" to capture LLM events)
+
+Setup is best-effort: if no license key is configured, telemetry is skipped
+with a warning rather than crashing the agent.
 """
 
 import logging
@@ -15,116 +20,69 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Module-level handles so callers can flush/shutdown on exit.
-_tracer_provider = None
-_meter_provider = None
-_logger_provider = None
-
-
-def _otlp_headers(license_key: str) -> str:
-    """New Relic authenticates OTLP ingest via the ``api-key`` header."""
-    return f"api-key={license_key}"
+# Module-level handle so callers can flush/shutdown on exit.
+_application = None
 
 
 def setup_telemetry(service_name: str) -> None:
-    """Initialise OTel trace, metric, and log pipelines.
+    """Initialise and register the New Relic agent.
 
-    Must be called once, as early as possible, before agents run. Reads:
-      * NEW_RELIC_LICENSE_KEY          (ingest/license key)
-      * OTEL_EXPORTER_OTLP_ENDPOINT    (defaults to https://otlp.nr-data.net)
+    Must be called once, as early as possible, before the LLM clients are
+    imported/constructed so the agent's instrumentation hooks are applied.
 
     Args:
-        service_name: Logical service name reported as ``service.name``.
+        service_name: Logical service name reported as the APM app name
+            (unless ``NEW_RELIC_APP_NAME`` is already set in the environment).
     """
-    global _tracer_provider, _meter_provider, _logger_provider
+    global _application
+
+    os.environ.setdefault("NEW_RELIC_APP_NAME", service_name)
 
     license_key = os.getenv("NEW_RELIC_LICENSE_KEY", "").strip()
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.nr-data.net").strip()
-
     if not license_key:
         logger.warning(
-            "NEW_RELIC_LICENSE_KEY is not set — telemetry exporters disabled. "
-            "Set it (and OTEL_EXPORTER_OTLP_ENDPOINT) to ship spans/metrics/logs."
+            "NEW_RELIC_LICENSE_KEY is not set — New Relic agent disabled. "
+            "Set it (and NEW_RELIC_APP_NAME) to report APM + AI Monitoring data."
         )
         return
 
-    # --- Standard OTEL_* env vars consumed by the SDK + Strands ----------
-    os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
-    os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = _otlp_headers(license_key)
-    os.environ.setdefault("OTEL_SERVICE_NAME", service_name)
-    os.environ.setdefault(
-        "OTEL_RESOURCE_ATTRIBUTES", f"service.name={service_name}"
-    )
-    # New Relic prefers delta temporality for OTLP metrics.
-    os.environ.setdefault(
-        "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "delta"
-    )
-    # Best coverage for GenAI semantic conventions + log auto-instrumentation.
-    os.environ.setdefault(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    os.environ.setdefault(
-        "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED", "true"
-    )
-
-    # --- Traces + metrics via Strands' built-in OTel integration ---------
     try:
-        from strands.telemetry import StrandsTelemetry
+        import newrelic.agent
 
-        strands_telemetry = StrandsTelemetry()
-        strands_telemetry.setup_otlp_exporter()                 # traces
-        strands_telemetry.setup_meter(enable_otlp_exporter=True)  # metrics
-
-        from opentelemetry import trace, metrics
-
-        _tracer_provider = trace.get_tracer_provider()
-        _meter_provider = metrics.get_meter_provider()
-        logger.info("Strands OTel trace + metric exporters configured.")
+        # Environment-only configuration (no config file).
+        newrelic.agent.initialize()
+        # Block briefly so the first transaction has a registered app to report
+        # to; harmless if it times out (the agent connects in the background).
+        _application = newrelic.agent.register_application(timeout=10.0)
+        logger.info("New Relic agent initialized (app=%s).", os.environ["NEW_RELIC_APP_NAME"])
     except Exception as exc:  # noqa: BLE001 - telemetry must never break the app
-        logger.warning("Failed to configure Strands telemetry: %s", exc)
+        logger.warning("Failed to initialize New Relic agent: %s", exc)
 
-    # --- Log bridging: Python logging -> OTLP logs -----------------------
+
+def record_attributes(attrs: dict) -> None:
+    """Attach custom attributes to the current New Relic transaction.
+
+    Replaces the OpenTelemetry ``trace_attributes`` mechanism for correlating
+    a request (e.g. session/environment) in the observability backend.
+    """
+    if not attrs:
+        return
     try:
-        _logger_provider = _setup_log_bridge(service_name, endpoint, license_key)
-        logger.info("OTLP log exporter configured.")
+        import newrelic.agent
+
+        for key, value in attrs.items():
+            newrelic.agent.add_custom_attribute(key, value)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to configure OTLP log exporter: %s", exc)
-
-
-def _setup_log_bridge(service_name: str, endpoint: str, license_key: str):
-    """Route stdlib logging records to OTLP logs (New Relic Logs)."""
-    from opentelemetry._logs import set_logger_provider
-    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-    from opentelemetry.sdk.resources import Resource
-
-    resource = Resource.create({"service.name": service_name})
-    provider = LoggerProvider(resource=resource)
-    set_logger_provider(provider)
-
-    exporter = OTLPLogExporter(
-        endpoint=f"{endpoint.rstrip('/')}/v1/logs",
-        headers={"api-key": license_key},
-    )
-    provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
-
-    # Attach to the root logger so all app logs are forwarded.
-    handler = LoggingHandler(level=logging.INFO, logger_provider=provider)
-    logging.getLogger().addHandler(handler)
-    return provider
+        logger.debug("Could not record New Relic attributes: %s", exc)
 
 
 def shutdown_telemetry() -> None:
-    """Flush and shut down all providers. Call on process exit."""
-    for provider in (_tracer_provider, _meter_provider, _logger_provider):
-        if provider is None:
-            continue
-        try:
-            # force_flush exists on SDK providers; shutdown drains exporters.
-            if hasattr(provider, "force_flush"):
-                provider.force_flush()
-            if hasattr(provider, "shutdown"):
-                provider.shutdown()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Error during telemetry shutdown: %s", exc)
+    """Flush and shut down the New Relic agent. Call on process exit."""
+    if _application is None:
+        return
+    try:
+        import newrelic.agent
+
+        newrelic.agent.shutdown_agent(timeout=60.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Error during New Relic agent shutdown: %s", exc)

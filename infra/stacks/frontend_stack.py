@@ -4,6 +4,7 @@ The bucket stays private (CloudFront Origin Access Control). The webapp's API
 URL is injected at deploy time as /config.json (no rebuild needed).
 """
 
+import re
 from pathlib import Path
 
 from aws_cdk import (
@@ -29,13 +30,26 @@ class FrontendStack(Stack):
         api_url: str,
         identity_pool_id: str,
         region: str,
+        deployment_id: str = "dev",
+        account: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, cid, **kwargs)
 
+        # Bucket names are global, lowercase and DNS-safe. Suffix with the
+        # account id for global uniqueness; fall back to CDK auto-naming if the
+        # account isn't known at synth time. (One id per region per account.)
+        safe_id = re.sub(r"[^a-z0-9-]", "-", deployment_id.lower())
+        bucket_name_kwargs = (
+            {"bucket_name": f"travel-frontend-{safe_id}-{account}"[:63]}
+            if account
+            else {}
+        )
+
         bucket = s3.Bucket(
             self,
             "SiteBucket",
+            **bucket_name_kwargs,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             enforce_ssl=True,
@@ -52,7 +66,7 @@ class FrontendStack(Stack):
                 viewer_protocol_policy=cf.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cache_policy=cf.CachePolicy.CACHING_OPTIMIZED,
             ),
-            comment="Wander travel-planner frontend",
+            comment=f"Wander travel-planner frontend ({deployment_id})",
         )
 
         s3deploy.BucketDeployment(

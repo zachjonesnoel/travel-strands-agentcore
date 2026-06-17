@@ -1,10 +1,11 @@
-# Wander — Multi-Agent Travel Planner (AgentCore + Strands + OpenTelemetry)
+# Wander — Multi-Agent Travel Planner (AgentCore + Strands + New Relic)
 
 A 5-agent travel planner built with the **Strands Agents SDK** on **Amazon
 Bedrock**, hosted on **Bedrock AgentCore Runtime**, fronted by a **Lambda
-Function URL** API and a **static webapp on S3 + CloudFront**, with full
-**OpenTelemetry** instrumentation exported over OTLP/HTTP (defaulting to New
-Relic). The entire stack deploys via a **Python AWS CDK** app.
+Function URL** API and a **static webapp on S3 + CloudFront**, monitored with
+the **New Relic Python agent** (AI Monitoring) on the runtime and the **New
+Relic Lambda layer** on the API. The entire stack deploys via a **Python AWS
+CDK** app.
 
 No paid third-party data APIs: web/flights/hotels use DuckDuckGo, weather uses
 Open-Meteo (both free, no keys).
@@ -26,7 +27,7 @@ Lambda Function URL (api/) ──SigV4──▶ AgentCore Runtime (agent/)
                        Search Agent  Weather Agent  Flights Agent  Hotels Agent
                        (DuckDuckGo)  (Open-Meteo)   (DuckDuckGo)   (DuckDuckGo)
 
- Telemetry: Strands → OTLP/HTTP → New Relic  (traces + metrics + logs)
+ Monitoring: New Relic Python agent (AgentCore, AI Monitoring) + New Relic Lambda layer (API)
 ```
 
 ## Repo layout
@@ -37,7 +38,7 @@ agent/      AgentCore agent — Strands multi-agent app
   main.py           local CLI runner
   agents/           orchestrator + 4 specialists + model factory
   tools/            search / weather / flights / hotels @tool functions
-  observability/    OpenTelemetry setup → OTLP
+  observability/    New Relic agent init (APM + AI Monitoring)
   requirements.txt  agent runtime deps
   Dockerfile        reference only (CDK uses direct code deploy, no container)
 api/        Lambda proxy (public Function URL) → InvokeAgentRuntime
@@ -55,18 +56,22 @@ infra/      Python CDK app
 After `cdk deploy`, the stack outputs the live resource values (webapp URL,
 API Function URL, AgentCore Runtime ARN). Read them from your own account with:
 
+Stack names are namespaced by `DEPLOYMENT_ID` (from `.env`), e.g. with
+`DEPLOYMENT_ID=dev` the stacks are `TravelAgent-dev` / `TravelApi-dev` /
+`TravelFrontend-dev`.
+
 ```bash
 cd infra && cdk deploy --outputs-file cdk.out/outputs.json   # outputs.json is git-ignored
-# or, after deploy:
-aws cloudformation describe-stacks --stack-name TravelFrontend \
+# or, after deploy (substitute your DEPLOYMENT_ID):
+aws cloudformation describe-stacks --stack-name TravelFrontend-dev \
   --query "Stacks[0].Outputs" --output table
 ```
 
 | Resource | Where to find it |
 |---|---|
-| Webapp | `TravelFrontend` → `SiteURL` |
-| API (Function URL) | `TravelApi` → `FunctionUrl` |
-| AgentCore Runtime | `TravelAgent` → `RuntimeArn` |
+| Webapp | `TravelFrontend-<id>` → `SiteURL` |
+| API (Function URL) | `TravelApi-<id>` → `FunctionUrl` |
+| AgentCore Runtime | `TravelAgent-<id>` → `RuntimeArn` |
 | Model | `us.amazon.nova-pro-v1:0` |
 
 > ⚠️ The Function URL and webapp are **public and unauthenticated**, and every
@@ -90,10 +95,10 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 npm install aws-cdk            # local CDK CLI matching aws-cdk-lib
 
 export AWS_PROFILE=jones-devrel AWS_REGION=us-east-1
-# config read at synth (e.g. from ../.env):
-export BEDROCK_MODEL_ID=us.amazon.nova-pro-v1:0
-export NEW_RELIC_LICENSE_KEY=...        # optional
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.nr-data.net
+# All Bedrock + New Relic config lives in the repo-root .env (loaded at synth):
+cp ../.env.example ../.env   # then edit ../.env (license key, account id, etc.)
+# Shell-exported vars still override .env if you prefer, e.g.:
+# export NEW_RELIC_LICENSE_KEY=...
 
 # one-time per account/region:
 PATH=".venv/bin:$PATH" npx cdk bootstrap
@@ -105,9 +110,9 @@ PATH=".venv/bin:$PATH" npx cdk deploy --all --require-approval never \
 CDK builds the agent artifact (source + linux/arm64 wheels) and the Lambda
 bundle (boto3) with no Docker, then creates three stacks:
 
-- **TravelAgent** → `AWS::BedrockAgentCore::Runtime` (CodeConfiguration, PYTHON_3_12)
-- **TravelApi** → Lambda + public Function URL (CORS), granted `InvokeAgentRuntime`
-- **TravelFrontend** → private S3 + CloudFront (OAC); deploys `frontend/` and
+- **TravelAgent-<id>** → `AWS::BedrockAgentCore::Runtime` (CodeConfiguration, PYTHON_3_12)
+- **TravelApi-<id>** → Lambda + public Function URL (CORS), granted `InvokeAgentRuntime`
+- **TravelFrontend-<id>** → private S3 + CloudFront (OAC); deploys `frontend/` and
   injects `config.json = {"apiUrl": <Function URL>}`
 
 Outputs (CloudFront URL, Function URL, runtime ARN) are written to
@@ -140,11 +145,20 @@ OpenAI GPT-OSS (`openai.gpt-oss-120b-1:0`, `…-20b-1:0`), and Anthropic
 
 ## Observability (New Relic)
 
-When `NEW_RELIC_LICENSE_KEY` is set on the runtime, the agent exports OTLP
-traces + metrics + logs. In New Relic, filter by
-`service.name = travel-agent-agentcore` for Distributed Tracing (orchestrator +
-specialist spans), Logs, and Metrics. AgentCore also ships built-in CloudWatch
-GenAI observability in parallel.
+**AgentCore runtime** — the **New Relic Python agent** is initialized in
+`agent/observability/telemetry.py` and reports when `NEW_RELIC_LICENSE_KEY` is
+set on the runtime. With `NEW_RELIC_AI_MONITORING_ENABLED=true`, the agent's
+native instrumentation captures the Bedrock (`botocore`) / OpenAI calls Strands
+makes as **AI Monitoring** LLM events (model, tokens, latency) alongside APM
+transactions and forwarded logs. Find it in New Relic as APM app
+`travel-agent-agentcore`; session/environment are attached as custom attributes.
+
+**API Lambda** — the **New Relic Lambda layer** (`NewRelicPython312`) wraps the
+proxy handler; its bundled extension sends data directly to New Relic using
+`NEW_RELIC_LICENSE_KEY` + `NEW_RELIC_ACCOUNT_ID` (no CloudWatch forwarding).
+Distributed tracing links the Lambda to the runtime.
+
+AgentCore also ships built-in CloudWatch GenAI observability in parallel.
 
 ## Teardown
 

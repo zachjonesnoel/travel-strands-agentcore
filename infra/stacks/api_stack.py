@@ -7,6 +7,8 @@ signs its requests with them. Invoke permission is granted *only* to that pool's
 unauthenticated IAM role — there is no public `Principal: "*"` resource policy.
 """
 
+import re
+
 from aws_cdk import (
     Stack,
     Duration,
@@ -21,21 +23,55 @@ from build import build_api
 
 
 class ApiStack(Stack):
-    def __init__(self, scope: Construct, cid: str, *, agent_runtime_arn: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        cid: str,
+        *,
+        agent_runtime_arn: str,
+        deployment_id: str = "dev",
+        nr_env: dict | None = None,
+        layer_version: str = "44",
+        **kwargs,
+    ) -> None:
         super().__init__(scope, cid, **kwargs)
+
+        # Lambda function names allow letters, digits, hyphens and underscores.
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "-", deployment_id).lower()
+        function_name = f"travel-api-{safe_id}"[:64]
+
+        # New Relic AWS Lambda layer (public account 451483290750). Bundles the
+        # New Relic Python agent + the New Relic extension, which sends telemetry
+        # straight to New Relic using NEW_RELIC_LICENSE_KEY (no CloudWatch
+        # forwarding). The layer's wrapper handler invokes our real handler named
+        # by NEW_RELIC_LAMBDA_HANDLER.
+        nr_layer = _lambda.LayerVersion.from_layer_version_arn(
+            self,
+            "NewRelicLayer",
+            f"arn:aws:lambda:{self.region}:451483290750:layer:NewRelicPython312:{layer_version}",
+        )
+
+        # New Relic layer config is assembled from ../.env in infra/app.py and
+        # passed in as nr_env, so all telemetry settings live in one place.
+        environment = {
+            "AGENT_RUNTIME_ARN": agent_runtime_arn,
+            "AGENT_QUALIFIER": "DEFAULT",
+            **(nr_env or {}),
+        }
 
         fn = _lambda.Function(
             self,
             "Proxy",
+            function_name=function_name,
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="lambda_function.handler",
+            # The New Relic layer wraps our handler; it calls the real handler
+            # named by NEW_RELIC_LAMBDA_HANDLER above.
+            handler="newrelic_lambda_wrapper.handler",
             code=_lambda.Code.from_asset(build_api()),
+            layers=[nr_layer],
             timeout=Duration.seconds(180),
             memory_size=256,
-            environment={
-                "AGENT_RUNTIME_ARN": agent_runtime_arn,
-                "AGENT_QUALIFIER": "DEFAULT",
-            },
+            environment=environment,
         )
         fn.add_to_role_policy(
             iam.PolicyStatement(

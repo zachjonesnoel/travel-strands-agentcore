@@ -1,2 +1,4 @@
 aws-cdk-lib>=2.160.0
 constructs>=10.3.0
+# Load New Relic / Bedrock config from the repo-root .env at synth time.
+python-dotenv>=1.0.0

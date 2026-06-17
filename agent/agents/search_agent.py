@@ -15,7 +15,7 @@ plainly rather than guessing."""
 
 def build_search_agent() -> Agent:
     return Agent(
-        model=get_model(),
+        model=get_model("search"),
         system_prompt=SYSTEM_PROMPT,
         tools=[duckduckgo_search],
     )

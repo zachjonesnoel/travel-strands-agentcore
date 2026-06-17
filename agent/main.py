@@ -1,7 +1,7 @@
 """Local CLI runner for the travel multi-agent app.
 
-Loads .env, initializes OpenTelemetry, runs the orchestrator against a demo
-(or command-line) travel query, prints the result, and flushes telemetry.
+Loads .env, initializes the New Relic agent, runs the orchestrator against a
+demo (or command-line) travel query, prints the result, and flushes telemetry.
 
 Usage:
     python main.py
@@ -27,10 +27,12 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    # Telemetry must be set up before any agent/model is constructed.
-    from observability import setup_telemetry, shutdown_telemetry
+    # The New Relic agent must be set up before any LLM client is constructed.
+    from observability import record_attributes, setup_telemetry, shutdown_telemetry
 
     setup_telemetry("travel-agent-local")
+
+    import newrelic.agent
 
     from agents.orchestrator import run_travel_query
 
@@ -39,13 +41,11 @@ def main() -> int:
     print(f"\n=== Travel query (session {session_id}) ===\n{prompt}\n")
 
     try:
-        result = run_travel_query(
-            prompt,
-            trace_attributes={
-                "session.id": session_id,
-                "app.environment": "local",
-            },
-        )
+        with newrelic.agent.BackgroundTask(
+            newrelic.agent.application(), name="travel-query"
+        ):
+            record_attributes({"session.id": session_id, "app.environment": "local"})
+            result = run_travel_query(prompt)
         print("\n=== Travel plan ===\n")
         print(result)
         return 0

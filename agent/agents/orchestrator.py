@@ -110,23 +110,21 @@ def find_hotels(query: str) -> str:
     return _result_text(_hotels(query))
 
 
-def build_orchestrator(trace_attributes: dict | None = None) -> Agent:
+def build_orchestrator() -> Agent:
     """Build the orchestrator agent.
 
-    Args:
-        trace_attributes: Optional span attributes (e.g. session/user IDs) used
-            to correlate traces for this invocation in the observability
-            backend.
+    Request correlation (session/environment) is attached to the New Relic
+    transaction by the entry point via ``record_attributes``, so no telemetry
+    attributes are threaded through here.
     """
     return Agent(
-        model=get_model(),
+        model=get_model("orchestrator"),
         system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
         tools=[research_destination, check_weather, find_flights, find_hotels],
-        trace_attributes=trace_attributes or {},
     )
 
 
-def run_travel_query(prompt: str, trace_attributes: dict | None = None) -> str:
+def run_travel_query(prompt: str) -> str:
     """Convenience helper: build the orchestrator and run a single query."""
-    orchestrator = build_orchestrator(trace_attributes=trace_attributes)
+    orchestrator = build_orchestrator()
     return _result_text(orchestrator(prompt))
