@@ -1,10 +1,14 @@
-"""ApiStack — the Lambda Function URL proxy to the runtime, secured with IAM.
+"""ApiStack — the public Lambda Function URL proxy, secured with IAM.
 
 The Function URL uses AuthType=AWS_IAM, so every request must be SigV4-signed.
 The browser front-end can't hold long-lived AWS credentials, so it obtains
 short-lived ones from a Cognito Identity Pool (unauthenticated identities) and
 signs its requests with them. Invoke permission is granted *only* to that pool's
-unauthenticated IAM role — there is no public `Principal: "*"` resource policy.
+unauthenticated IAM role — there is no public ``Principal: "*"`` resource policy.
+
+The proxy invokes the agent Lambda synchronously (``lambda:Invoke``). It also
+carries the opentelemetry-lambda layer so the incoming request + the downstream
+invoke are traced and joined to the agent's spans (one distributed trace).
 """
 
 from aws_cdk import (
@@ -21,28 +25,59 @@ from build import build_api
 
 
 class ApiStack(Stack):
-    def __init__(self, scope: Construct, cid: str, *, agent_runtime_arn: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        cid: str,
+        *,
+        agent_function: _lambda.IFunction,
+        nr_key: str,
+        nr_otlp_endpoint: str,
+        otel_layer_arns: list[str],
+        architecture: _lambda.Architecture,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, cid, **kwargs)
+
+        env_vars = {
+            "AGENT_FUNCTION_NAME": agent_function.function_name,
+            # --- opentelemetry-lambda layer wiring (mirrors AgentStack) --------
+            "AWS_LAMBDA_EXEC_WRAPPER": "/opt/otel-instrument",
+            "OPENTELEMETRY_COLLECTOR_CONFIG_URI": "/var/task/collector.yaml",
+            "NEW_RELIC_OTLP_ENDPOINT": nr_otlp_endpoint,
+            "OTEL_SERVICE_NAME": "travel-api-proxy",
+            "OTEL_RESOURCE_ATTRIBUTES": "service.name=travel-api-proxy",
+            "OTEL_PROPAGATORS": "tracecontext,baggage",
+            # Bridge Python logging -> OTLP logs with level + message + trace
+            # correlation (see AgentStack).
+            "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
+            "OTEL_PYTHON_LOG_CORRELATION": "true",
+            # See AgentStack — avoids the requests-instrumentation timeout bug.
+            "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS": "requests",
+        }
+        if nr_key:
+            env_vars["NEW_RELIC_LICENSE_KEY"] = nr_key
 
         fn = _lambda.Function(
             self,
             "Proxy",
             runtime=_lambda.Runtime.PYTHON_3_12,
+            architecture=architecture,
             handler="lambda_function.handler",
             code=_lambda.Code.from_asset(build_api()),
             timeout=Duration.seconds(180),
             memory_size=256,
-            environment={
-                "AGENT_RUNTIME_ARN": agent_runtime_arn,
-                "AGENT_QUALIFIER": "DEFAULT",
-            },
+            environment=env_vars,
+            layers=[
+                _lambda.LayerVersion.from_layer_version_arn(
+                    self, f"OtelLayer{i}", arn
+                )
+                for i, arn in enumerate(otel_layer_arns)
+            ],
         )
-        fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["bedrock-agentcore:InvokeAgentRuntime"],
-                resources=[agent_runtime_arn, f"{agent_runtime_arn}/*"],
-            )
-        )
+        # Allow the proxy to invoke the agent Lambda (adds lambda:InvokeFunction
+        # to the proxy's role, scoped to the agent function).
+        agent_function.grant_invoke(fn)
 
         # IAM-authenticated URL — callers must SigV4-sign. AWS_IAM auth means CDK
         # creates NO public resource policy; access is authorized purely by the

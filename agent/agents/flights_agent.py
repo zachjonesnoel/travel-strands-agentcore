@@ -16,7 +16,7 @@ state what you need."""
 
 def build_flights_agent() -> Agent:
     return Agent(
-        model=get_model(),
+        model=get_model("FLIGHTS_MODEL_ID"),
         system_prompt=SYSTEM_PROMPT,
         tools=[search_flights],
     )

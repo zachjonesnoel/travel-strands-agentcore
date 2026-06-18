@@ -1,10 +1,17 @@
-"""Configure OpenTelemetry (traces, metrics, logs) and export over OTLP/HTTP.
+"""Configure OpenTelemetry (traces, metrics, logs) — dual-mode.
 
-Strands ships built-in OTel instrumentation via ``StrandsTelemetry`` which
-reads standard ``OTEL_*`` environment variables. We set those variables here
-(targeting New Relic's OTLP endpoint by default), wire up trace + metric
-exporters through Strands, and additionally bridge Python ``logging`` records
-to OTLP logs.
+This app runs in two environments:
+
+* **On AWS Lambda** (production): the ``opentelemetry-lambda`` layer owns
+  telemetry. Its exec wrapper (``/opt/otel-instrument``) installs the global
+  tracer/meter/logger providers and OTLP exporters pointed at the in-process
+  collector, which forwards to New Relic. Strands attaches its GenAI spans to
+  that global provider automatically, so ``setup_telemetry`` is a **no-op** here
+  — configuring our own providers would shadow the layer's and break export.
+
+* **Local dev** (``main.py``): there is no layer, so we wire in-process OTLP/HTTP
+  exporters straight to New Relic via Strands' ``StrandsTelemetry`` and bridge
+  stdlib ``logging`` records to OTLP logs.
 
 All exporters are best-effort: if no ingest key is configured, telemetry is
 skipped with a warning rather than crashing the agent.
@@ -21,15 +28,27 @@ _meter_provider = None
 _logger_provider = None
 
 
+def _running_under_lambda_layer() -> bool:
+    """True when the opentelemetry-lambda layer is managing telemetry.
+
+    ``AWS_LAMBDA_FUNCTION_NAME`` is set by the Lambda runtime; the exec wrapper
+    additionally sets ``AWS_LAMBDA_EXEC_WRAPPER``. Either means the layer owns
+    the global providers and we must not install our own.
+    """
+    return bool(
+        os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("AWS_LAMBDA_EXEC_WRAPPER")
+    )
+
+
 def _otlp_headers(license_key: str) -> str:
     """New Relic authenticates OTLP ingest via the ``api-key`` header."""
     return f"api-key={license_key}"
 
 
 def setup_telemetry(service_name: str) -> None:
-    """Initialise OTel trace, metric, and log pipelines.
+    """Initialise OTel trace, metric, and log pipelines (local dev only).
 
-    Must be called once, as early as possible, before agents run. Reads:
+    Under the Lambda layer this returns immediately. Locally it reads:
       * NEW_RELIC_LICENSE_KEY          (ingest/license key)
       * OTEL_EXPORTER_OTLP_ENDPOINT    (defaults to https://otlp.nr-data.net)
 
@@ -37,6 +56,13 @@ def setup_telemetry(service_name: str) -> None:
         service_name: Logical service name reported as ``service.name``.
     """
     global _tracer_provider, _meter_provider, _logger_provider
+
+    if _running_under_lambda_layer():
+        logger.info(
+            "OpenTelemetry is managed by the Lambda layer — skipping in-process "
+            "exporter setup (Strands uses the layer's global provider)."
+        )
+        return
 
     license_key = os.getenv("NEW_RELIC_LICENSE_KEY", "").strip()
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.nr-data.net").strip()

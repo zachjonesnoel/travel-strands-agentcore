@@ -1,0 +1,73 @@
+# OpenTelemetry Collector config for the in-process collector shipped by the
+# opentelemetry-lambda layer. The Lambda's instrumentation SDK exports OTLP to
+# this collector on localhost; the collector batches and forwards to New Relic.
+#
+# Loaded via OPENTELEMETRY_COLLECTOR_CONFIG_URI=/var/task/collector.yaml.
+# Bundled into BOTH Lambda code packages by infra/build.py.
+#
+# NOTE: the New Relic endpoint uses NEW_RELIC_OTLP_ENDPOINT (NOT
+# OTEL_EXPORTER_OTLP_ENDPOINT) on purpose — the exec wrapper points the in-process
+# SDK at the local collector via OTEL_EXPORTER_OTLP_ENDPOINT, so reusing that var
+# here would create a loop. Keep them distinct.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+
+processors:
+  # Batch before export to reduce request count. Cap the batch size so a single
+  # large multi-agent run (the orchestrator fans out to 4 specialists, each
+  # emitting GenAI spans) is split into several smaller POSTs rather than one
+  # oversized request that's more likely to be stranded by the freeze.
+  batch:
+    send_batch_size: 256
+    send_batch_max_size: 512
+    timeout: 1s
+  # NOTE: we deliberately do NOT use the `decouple` processor. decouple lets the
+  # collector return before export completes and relies on a LATER invocation to
+  # drain its queue. Under sparse traffic the execution environment freezes first,
+  # and because parent spans end AFTER their children (an execute_tool span wraps
+  # the invoke_agent sub-agent it calls), the parents are the last spans exported
+  # and get stranded in the un-drained tail — children then show "missing parent"
+  # in New Relic. Exporting synchronously (no decouple) keeps every trace complete.
+
+exporters:
+  otlp_http/newrelic:
+    endpoint: ${env:NEW_RELIC_OTLP_ENDPOINT}
+    headers:
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
+    # gzip shrinks the (often large) multi-agent span batches, so each POST to
+    # New Relic completes faster — less likely to be caught mid-flight when the
+    # Lambda execution environment freezes after the handler returns (the cause
+    # of the occasional "context deadline exceeded" on traces/metrics).
+    compression: gzip
+    # Explicit, generous per-request timeout (headroom over a cold-start TLS
+    # handshake to otlp.nr-data.net).
+    timeout: 30s
+    # Bounded retries keep export LOSSLESS across a freeze: a request stranded by
+    # the freeze fails with "context deadline exceeded", then retries on the next
+    # thaw and succeeds. max_elapsed_time caps how long we keep retrying.
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 8s
+      max_elapsed_time: 60s
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]

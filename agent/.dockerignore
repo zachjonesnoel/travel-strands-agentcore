@@ -1,9 +1,0 @@
-.env
-.venv
-venv/
-__pycache__/
-*.pyc
-.git/
-.gitignore
-*.md
-.bedrock_agentcore.yaml

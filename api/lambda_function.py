@@ -1,19 +1,24 @@
-"""Public HTTPS proxy (Lambda Function URL) in front of the AgentCore runtime.
+"""Public HTTPS proxy (Lambda Function URL) in front of the agent Lambda.
 
-A browser front-end can't safely hold AWS credentials, and AgentCore's
-InvokeAgentRuntime API requires SigV4 (IAM) auth. This Lambda holds the IAM
-permission and translates a plain JSON POST into an InvokeAgentRuntime call, so
+A browser front-end can't safely hold AWS credentials, and the Function URL is
+IAM-authenticated. This Lambda holds the IAM permission to invoke the agent
+Lambda and translates a plain JSON POST into a synchronous ``lambda:Invoke``, so
 the front-end just does fetch()/curl against the Function URL.
 
 Request  (POST):  {"prompt": "...", "session_id": "optional"}
 Response (200):   {"session_id": "...", "result": "..."}
 
 CORS (and the OPTIONS preflight) is configured declaratively on the Function URL
-in the CDK ApiStack, so it is intentionally NOT handled here. The Function URL
-is created with AuthType=AWS_IAM, so every request must be SigV4-signed and is
+in the CDK ApiStack, so it is intentionally NOT handled here. The Function URL is
+created with AuthType=AWS_IAM, so every request must be SigV4-signed and is
 authorized against the caller's IAM identity — it is NOT publicly invokable. The
 browser front-end signs its requests using short-lived, unauthenticated
 credentials from a Cognito Identity Pool (see the CDK ApiStack / frontend).
+
+Telemetry: this Lambda also carries the opentelemetry-lambda layer. The incoming
+request and the downstream Invoke are auto-instrumented; we additionally inject
+the active trace context into the invoke payload so the agent's spans join the
+same distributed trace.
 """
 
 import base64
@@ -24,10 +29,9 @@ import uuid
 import boto3
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
-RUNTIME_ARN = os.environ["AGENT_RUNTIME_ARN"]
-QUALIFIER = os.environ.get("AGENT_QUALIFIER", "DEFAULT")
+AGENT_FUNCTION_NAME = os.environ["AGENT_FUNCTION_NAME"]
 
-_client = boto3.client("bedrock-agentcore", region_name=REGION)
+_client = boto3.client("lambda", region_name=REGION)
 
 
 def _resp(status: int, body: dict) -> dict:
@@ -36,6 +40,22 @@ def _resp(status: int, body: dict) -> dict:
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps(body),
     }
+
+
+def _otel_carrier() -> dict:
+    """W3C trace context for the current span, for the agent to continue.
+
+    Best-effort: the OTel API ships with the Lambda layer. If it's unavailable
+    (e.g. local unit test without the layer) we return an empty carrier.
+    """
+    try:
+        from opentelemetry.propagate import inject
+
+        carrier: dict = {}
+        inject(carrier)
+        return carrier
+    except Exception:  # noqa: BLE001 - propagation is best-effort
+        return {}
 
 
 def handler(event, context):
@@ -61,22 +81,25 @@ def handler(event, context):
             {"error": "Missing 'prompt'.", "example": {"prompt": "Plan a trip to Tokyo"}},
         )
 
-    # AgentCore requires runtimeSessionId >= 33 chars. Reuse a caller-supplied
-    # one (for multi-turn continuity) or mint a fresh one.
-    session_id = (data.get("session_id") or "").strip()
-    if len(session_id) < 33:
-        session_id = "frontend-" + uuid.uuid4().hex  # 41 chars
+    # Reuse a caller-supplied session id (for multi-turn continuity) or mint one.
+    session_id = (data.get("session_id") or "").strip() or "frontend-" + uuid.uuid4().hex
+
+    payload = {
+        "prompt": prompt,
+        "session_id": session_id,
+        "_otel_context": _otel_carrier(),
+    }
 
     try:
-        r = _client.invoke_agent_runtime(
-            agentRuntimeArn=RUNTIME_ARN,
-            qualifier=QUALIFIER,
-            runtimeSessionId=session_id,
-            contentType="application/json",
-            accept="application/json",
-            payload=json.dumps({"prompt": prompt, "session_id": session_id}).encode(),
+        r = _client.invoke(
+            FunctionName=AGENT_FUNCTION_NAME,
+            InvocationType="RequestResponse",
+            Payload=json.dumps(payload).encode(),
         )
-        body = r["response"].read()
+        body = r["Payload"].read()
+        # A handler error surfaces as FunctionError with the trace in the payload.
+        if r.get("FunctionError"):
+            return _resp(502, {"error": f"Agent function error: {body.decode('utf-8', 'replace')}"})
     except Exception as exc:  # noqa: BLE001 - surface a clean error to the client
         return _resp(502, {"error": f"Agent invocation failed: {exc}"})
 

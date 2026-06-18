@@ -1,0 +1,162 @@
+{
+  "name": "Wander — AI Monitoring (OpenTelemetry)",
+  "description": "GenAI observability for the Strands travel agent, built from OTel gen_ai.* span attributes (Bedrock model calls + Strands agent/tool spans). Replace accountIds with your New Relic account if it is not REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID.",
+  "permissions": "PUBLIC_READ_WRITE",
+  "pages": [
+    {
+      "name": "AI Overview",
+      "description": "Model calls, tokens, latency, and agent/tool breakdown.",
+      "widgets": [
+        {
+          "title": "LLM calls",
+          "layout": { "column": 1, "row": 1, "width": 3, "height": 3 },
+          "visualization": { "id": "viz.billboard" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT count(*) AS 'LLM calls' FROM Span WHERE `rpc.service` = 'Bedrock Runtime'" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Input tokens",
+          "layout": { "column": 4, "row": 1, "width": 3, "height": 3 },
+          "visualization": { "id": "viz.billboard" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT sum(`gen_ai.usage.input_tokens`) AS 'Input tokens' FROM Span WHERE `rpc.service` = 'Bedrock Runtime'" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Output tokens",
+          "layout": { "column": 7, "row": 1, "width": 3, "height": 3 },
+          "visualization": { "id": "viz.billboard" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT sum(`gen_ai.usage.output_tokens`) AS 'Output tokens' FROM Span WHERE `rpc.service` = 'Bedrock Runtime'" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Avg model latency (ms)",
+          "layout": { "column": 10, "row": 1, "width": 3, "height": 3 },
+          "visualization": { "id": "viz.billboard" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT average(duration) * 1000 AS 'Avg latency (ms)' FROM Span WHERE `rpc.service` = 'Bedrock Runtime'" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "LLM calls over time (by model)",
+          "layout": { "column": 1, "row": 4, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.line" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT count(*) FROM Span WHERE `rpc.service` = 'Bedrock Runtime' FACET `gen_ai.request.model` TIMESERIES" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Token usage over time",
+          "layout": { "column": 7, "row": 4, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.area" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT sum(`gen_ai.usage.input_tokens`) AS 'input', sum(`gen_ai.usage.output_tokens`) AS 'output' FROM Span WHERE `rpc.service` = 'Bedrock Runtime' TIMESERIES" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Calls by model",
+          "layout": { "column": 1, "row": 7, "width": 4, "height": 3 },
+          "visualization": { "id": "viz.pie" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT count(*) FROM Span WHERE `rpc.service` = 'Bedrock Runtime' FACET `gen_ai.request.model`" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Latency percentiles by model (ms)",
+          "layout": { "column": 5, "row": 7, "width": 4, "height": 3 },
+          "visualization": { "id": "viz.table" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT percentile(duration * 1000, 50, 95, 99) FROM Span WHERE `rpc.service` = 'Bedrock Runtime' FACET `gen_ai.request.model`" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Finish reasons",
+          "layout": { "column": 9, "row": 7, "width": 4, "height": 3 },
+          "visualization": { "id": "viz.bar" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT count(*) FROM Span WHERE `rpc.service` = 'Bedrock Runtime' FACET `gen_ai.response.finish_reasons`" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Tool / specialist invocations",
+          "layout": { "column": 1, "row": 10, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.bar" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT count(*) FROM Span WHERE name LIKE 'execute_tool %' FACET name" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Calls & avg tokens by model",
+          "layout": { "column": 7, "row": 10, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.table" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT count(*) AS 'calls', average(`gen_ai.usage.input_tokens`) AS 'avg in', average(`gen_ai.usage.output_tokens`) AS 'avg out', sum(`gen_ai.usage.input_tokens`) + sum(`gen_ai.usage.output_tokens`) AS 'total tokens' FROM Span WHERE `rpc.service` = 'Bedrock Runtime' FACET `gen_ai.request.model`" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        }
+      ]
+    },
+    {
+      "name": "AI Requests",
+      "description": "Recent model calls and captured prompts / responses (gen_ai message content).",
+      "widgets": [
+        {
+          "title": "Recent model calls",
+          "layout": { "column": 1, "row": 1, "width": 12, "height": 4 },
+          "visualization": { "id": "viz.table" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT `gen_ai.request.model` AS 'model', `gen_ai.usage.input_tokens` AS 'in', `gen_ai.usage.output_tokens` AS 'out', duration * 1000 AS 'ms', `trace.id` AS 'trace' FROM Span WHERE `rpc.service` = 'Bedrock Runtime' LIMIT 100" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        },
+        {
+          "title": "Prompts & responses (Strands message content)",
+          "layout": { "column": 1, "row": 5, "width": 12, "height": 5 },
+          "visualization": { "id": "viz.table" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              { "accountIds": ["REPLACE_YOUR_NEW_RELIC_ACCOUNT_ID"], "query": "SELECT `gen_ai.agent.name` AS 'agent', `gen_ai.input.messages` AS 'input', `gen_ai.output.messages` AS 'output', `trace.id` AS 'trace' FROM Span WHERE `gen_ai.input.messages` IS NOT NULL LIMIT 50" }
+            ],
+            "platformOptions": { "ignoreTimeRange": false }
+          }
+        }
+      ]
+    }
+  ]
+}

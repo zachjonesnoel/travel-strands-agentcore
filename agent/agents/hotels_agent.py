@@ -16,7 +16,7 @@ missing, state what you need."""
 
 def build_hotels_agent() -> Agent:
     return Agent(
-        model=get_model(),
+        model=get_model("HOTELS_MODEL_ID"),
         system_prompt=SYSTEM_PROMPT,
         tools=[search_hotels],
     )
