@@ -119,7 +119,7 @@ def build_orchestrator(trace_attributes: dict | None = None) -> Agent:
             backend.
     """
     return Agent(
-        model=get_model(),
+        model=get_model("ORCHESTRATOR_MODEL_ID"),
         system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
         tools=[research_destination, check_weather, find_flights, find_hotels],
         trace_attributes=trace_attributes or {},

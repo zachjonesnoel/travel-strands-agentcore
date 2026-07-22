@@ -66,6 +66,14 @@ def setup_telemetry(service_name: str) -> None:
     os.environ.setdefault(
         "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED", "true"
     )
+    # Default the GenAI content-capture flags to on (Strands' native behaviour).
+    for _flag_var in (
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_METADATA",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_TOOL_INPUT",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_TOOL_OUTPUT",
+    ):
+        os.environ.setdefault(_flag_var, "true")
 
     # --- Traces + metrics via Strands' built-in OTel integration ---------
     try:
@@ -82,6 +90,16 @@ def setup_telemetry(service_name: str) -> None:
         logger.info("Strands OTel trace + metric exporters configured.")
     except Exception as exc:  # noqa: BLE001 - telemetry must never break the app
         logger.warning("Failed to configure Strands telemetry: %s", exc)
+
+    # Make the OTEL_INSTRUMENTATION_GENAI_CAPTURE_* flags govern content capture.
+    # Must run before any Strands agent is constructed (agents grab the tracer
+    # singleton at build time), so keep this ahead of the orchestrator import.
+    try:
+        from observability.genai_capture import install_genai_capture_gate
+
+        install_genai_capture_gate()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to install GenAI capture gate: %s", exc)
 
     # --- Log bridging: Python logging -> OTLP logs -----------------------
     try:

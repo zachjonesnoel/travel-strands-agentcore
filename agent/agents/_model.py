@@ -12,9 +12,27 @@ from strands.models import BedrockModel
 DEFAULT_MODEL_ID = "us.amazon.nova-pro-v1:0"
 
 
-def get_model() -> BedrockModel:
-    """Build a BedrockModel from environment configuration."""
+def get_model(env_var: str | None = None) -> BedrockModel:
+    """Build a BedrockModel from environment configuration.
+
+    Resolution order for the model id:
+      1. The per-agent override in ``env_var`` (e.g. ``SEARCH_MODEL_ID``), if set.
+      2. ``BEDROCK_MODEL_ID`` (the global default for all agents).
+      3. ``DEFAULT_MODEL_ID``.
+
+    Args:
+        env_var: Name of an agent-specific env var to check first. Lets each
+            specialist run on a different model (e.g. a stronger tool-calling
+            model for the search agent). Small models such as
+            ``openai.gpt-oss-20b`` are unreliable at emitting valid tool-call
+            arguments and may crash tool validation — prefer a capable model
+            for agents that call tools.
+    """
+    model_id = (
+        (os.getenv(env_var) if env_var else None)
+        or os.getenv("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
+    )
     return BedrockModel(
-        model_id=os.getenv("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID),
+        model_id=model_id,
         region_name=os.getenv("AWS_REGION", "us-east-1"),
     )
