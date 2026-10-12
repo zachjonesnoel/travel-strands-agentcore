@@ -29,6 +29,7 @@ class AgentStack(Stack):
         *,
         deployment_id: str,
         model_id: str,
+        agent_models: dict[str, str],
         nr_key: str,
         otel_endpoint: str,
         **kwargs,
@@ -85,6 +86,7 @@ class AgentStack(Stack):
 
         env_vars = {
             "BEDROCK_MODEL_ID": model_id,
+            **agent_models,  # per-agent overrides read by agents/_model.py
             "OTEL_EXPORTER_OTLP_ENDPOINT": otel_endpoint,
             "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
             "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",

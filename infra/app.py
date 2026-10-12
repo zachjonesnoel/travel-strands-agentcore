@@ -7,6 +7,8 @@
 
 Config via environment (read from your shell / .env at synth time):
   BEDROCK_MODEL_ID              default us.amazon.nova-pro-v1:0
+  <AGENT>_MODEL_ID              optional per-agent override (ORCHESTRATOR, SEARCH,
+                                WEATHER, FLIGHTS, HOTELS)
   NEW_RELIC_LICENSE_KEY         optional; enables OTel export to New Relic
   OTEL_EXPORTER_OTLP_ENDPOINT   default https://otlp.nr-data.net
 """
@@ -35,6 +37,9 @@ env = cdk.Environment(
 deployment_id = (os.environ.get("DEPLOYMENT_ID") or "dev").strip()
 
 model_id = os.environ.get("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
+agent_model_vars = ("ORCHESTRATOR_MODEL_ID", "SEARCH_MODEL_ID", "WEATHER_MODEL_ID",
+                    "FLIGHTS_MODEL_ID", "HOTELS_MODEL_ID")
+agent_models = {k: os.environ[k] for k in agent_model_vars if os.environ.get(k)}
 nr_key = os.environ.get("NEW_RELIC_LICENSE_KEY", "")
 otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.nr-data.net")
 
@@ -42,7 +47,7 @@ agent = AgentStack(
     app, "TravelAgent",
     stack_name=f"TravelAgent-{deployment_id}",
     deployment_id=deployment_id,
-    model_id=model_id, nr_key=nr_key, otel_endpoint=otel_endpoint, env=env,
+    model_id=model_id, agent_models=agent_models, nr_key=nr_key, otel_endpoint=otel_endpoint, env=env,
 )
 api = ApiStack(
     app, "TravelApi",
